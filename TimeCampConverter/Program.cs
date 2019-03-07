@@ -9,15 +9,17 @@ namespace TimecampConverter
 {
     class Program
     {
-
-        private static string path = "C:\\Users\\coren\\Desktop\\TimeCamp\\Reports   TimeCamp.html";
+        private static string path = "C:\\Users\\coren\\Desktop\\TimeCamp\\";
+        private static string inputFileName = "Reports   TimeCamp.html";
+        private static string outputFileName = "Report_Mars.xlsx";
 
         static void Main(string[] args)
         {
             Console.WriteLine("TIMECAMP CONVERT");
             Console.WriteLine("Reading File");
+            var filePath = path + inputFileName;
             //TODO controller les max (En heure (max 50h/s ou 140h/m))
-            if (!File.Exists(path))
+            if (!File.Exists(filePath))
             {
                 throw new FileNotFoundException();
             }
@@ -29,7 +31,7 @@ namespace TimecampConverter
 
             //Création du fichier Excel
             // create xls if not exists
-            if (!File.Exists("test.xlsx"))
+            if (!File.Exists(path+outputFileName))
             {
                 XSSFWorkbook wb;
                 XSSFSheet sh;
@@ -59,7 +61,7 @@ namespace TimecampConverter
                     r.CreateCell(5).SetCellValue(task.Description);
                 }
 
-                using (var fs = new FileStream("C:\\Users\\coren\\Desktop\\TimeCamp\\test.xlsx", FileMode.Create, FileAccess.Write))
+                using (var fs = new FileStream(path+outputFileName, FileMode.Create, FileAccess.Write))
                 {
                     wb.Write(fs);
                 }
@@ -105,7 +107,7 @@ namespace TimecampConverter
 
         private static void FillUniteeTaskList(List<UniteeTask> uniteeTaskList)
         {
-            foreach (var line in File.ReadAllLines(path))
+            foreach (var line in File.ReadAllLines(path + inputFileName))
             {
                 if (!(line.Contains("data-title=\"Day\"") && line.Contains("data-title=\"Task\"") && line.Contains("data-title=\"Level 1\"") && line.Contains("data-title=\"Time\"")))
                 {
