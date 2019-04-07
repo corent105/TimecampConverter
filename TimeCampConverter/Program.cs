@@ -3,31 +3,32 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Net.Http;
+using System.Runtime.Serialization.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
 
 namespace TimecampConverter
 {
     class Program
     {
+        private const string ApiToken = "9b704c896acbe4eb55e617dc5a";
+        private const string ReferenceFacture = "2019-3";
         private static string path = "C:\\Users\\coren\\Desktop\\TimeCamp\\";
-        private static string inputFileName = "Reports   TimeCamp.html";
-        private static string outputFileName = "Report_Mars.xlsx";
+        private static string outputFileName = "Export_Mars.xlsx";
+        private static readonly DateTime start = new DateTime(2019,03,01);
+        private static readonly DateTime end = new DateTime(2019,03,31);
 
         static void Main(string[] args)
         {
             Console.WriteLine("TIMECAMP CONVERT");
             Console.WriteLine("Reading File");
-            var filePath = path + inputFileName;
             //TODO controller les max (En heure (max 50h/s ou 140h/m))
-            if (!File.Exists(filePath))
-            {
-                throw new FileNotFoundException();
-            }
-            List<UniteeTask> uniteeTaskList = new List<UniteeTask>();
-            UniteeTaskComparator comparator = new UniteeTaskComparator();
-            FillUniteeTaskList(uniteeTaskList);
+            List<UniteeTask> uniteeTaskList =  FillUniteeTaskList(start,end).Result;
+            //Suppression des doublons
             uniteeTaskList = MergeDoubleTaskByDay(uniteeTaskList);
-            uniteeTaskList.Sort(comparator);
+            uniteeTaskList.Sort(new UniteeTaskComparator());
 
             //Création du fichier Excel
             // create xls if not exists
@@ -39,27 +40,52 @@ namespace TimecampConverter
 
                 // create sheet
                 sh = (XSSFSheet)wb.CreateSheet("Sheet1");
-                for (int i = 0; i < uniteeTaskList.Count; i++)
+                // Create header
+                var r = sh.CreateRow(0);
+                //Date 
+                r.CreateCell(0).SetCellValue("Date");
+                //Temps facturé 
+                r.CreateCell(1).SetCellValue("Temps facturé");
+                //Projet
+                r.CreateCell(2).SetCellValue("Projet");
+                //Type    
+                r.CreateCell(3).SetCellValue("Type");
+                //Réf facture
+                r.CreateCell(4).SetCellValue("Référence facture");
+                //Description
+                r.CreateCell(5).SetCellValue("Description");
+
+                int i = 1;
+                for (i = 1; i < uniteeTaskList.Count; i++)
                 {
                     var task = uniteeTaskList[i];
-                    var r = sh.CreateRow(i);
+                    r = sh.CreateRow(i);
                     //Date 
-                    var cel = r.CreateCell(0);
-                    cel.SetCellValue(task.Date.ToString());
+                    r.CreateCell(0).SetCellValue(task.Date.ToString());
                     //Temps facturé 
-                    var cell = r.CreateCell(1);
-                    double value = (double)(task.TimeSpent / 60);
-                    cell.SetCellValue(value);
-                    
+                    r.CreateCell(1).SetCellValue((double)(task.TimeSpent / 60));
                     //Projet
                     r.CreateCell(2).SetCellValue(task.Project);
                     //Type    
                     r.CreateCell(3).SetCellValue("Developpement");
                     //Réf facture
-                    r.CreateCell(4).SetCellValue("");
+                    r.CreateCell(4).SetCellValue(task.ReferenceFacture);
                     //Description
                     r.CreateCell(5).SetCellValue(task.Description);
                 }
+
+                var limitTableau = ++i;
+                r = sh.CreateRow(i++);
+                //Date 
+                r.CreateCell(0).SetCellValue("Total");
+                //Temps facturé 
+                r.CreateCell(1).SetCellFormula("SUBTOTAL(109,B2:B" + limitTableau + ")");
+                
+                r = sh.CreateRow(i++);
+                //Date 
+                r.CreateCell(0).SetCellValue("Total");
+                //Temps facturé 
+                r.CreateCell(1).SetCellFormula("SUBTOTAL(109,B2:B" + limitTableau + ")/8/2");
 
                 using (var fs = new FileStream(path+outputFileName, FileMode.Create, FileAccess.Write))
                 {
@@ -105,70 +131,41 @@ namespace TimecampConverter
             return mergeUniteeTaskList;
         }
 
-        private static void FillUniteeTaskList(List<UniteeTask> uniteeTaskList)
+        private static async Task<List<UniteeTask>> FillUniteeTaskList(DateTime start , DateTime end)
         {
-            foreach (var line in File.ReadAllLines(path + inputFileName))
+            HttpClient httpClient = new HttpClient();
+            var serializer = new DataContractJsonSerializer(typeof(List<Entrie>));
+            var response = httpClient.GetStreamAsync("https://www.timecamp.com/third_party/api/entries/format/json/api_token/" + ApiToken + "/from/" + start.ToString("yyyy-MM-dd") + "/to/" + end.ToString("yyyy-MM-dd") + "/");
+            var entries = serializer.ReadObject(await response) as List<Entrie>;
+            List<UniteeTask> uniteeTaskList = new List<UniteeTask>();
+            foreach (var entrie in entries)
             {
-                if (!(line.Contains("data-title=\"Day\"") && line.Contains("data-title=\"Task\"") && line.Contains("data-title=\"Level 1\"") && line.Contains("data-title=\"Time\"")))
-                {
-                    continue;
-                }
                 UniteeTask uniteeTask = new UniteeTask();
-                string formattedLine = FormatLine(line);
-                var split = formattedLine.Split(">");
-                for (int i = 0; i < split.Length; i++)
-                {
-                    if (split[i].Contains("data-title=\"Day\""))
-                    {
-                        string literalDate = split[i + 1].Split("<")[0].Trim();
-                        string[] s = literalDate.Split("-");
-                        if (s.Length != 3)
-                        {
-                            break;
-                        }
-                        literalDate = s[2] + "/" + s[1] + "/" + s[0];
-                        Console.Write(literalDate);
-                        uniteeTask.Date = DateTime.ParseExact(literalDate, "dd/MM/yyyy", CultureInfo.InvariantCulture);
-                    }
+                uniteeTask.Date = DateTime.ParseExact(entrie.date, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+                DateTime endTime = uniteeTask.Date
+                    .AddHours(Convert.ToDouble(entrie.end_time.Split(":")[0]))
+                    .AddMinutes(Convert.ToDouble(entrie.end_time.Split(":")[1]))
+                    .AddSeconds(Convert.ToDouble(entrie.end_time.Split(":")[2]));
+                DateTime startTime = uniteeTask.Date
+                    .AddHours(Convert.ToDouble(entrie.start_time.Split(":")[0]))
+                    .AddMinutes(Convert.ToDouble(entrie.start_time.Split(":")[1]))
+                    .AddSeconds(Convert.ToDouble(entrie.start_time.Split(":")[2]));
+                uniteeTask.TimeSpent = (decimal) endTime.Subtract(startTime).TotalMinutes;
 
-                    if (split[i].Contains("data-title=\"Task\""))
-                    {
-                        string description = split[i + 1].Split("<")[0].Trim();
-                        uniteeTask.Description = description;
-                        Console.Write(description);
-                    }
+                // Get task
+                serializer = new DataContractJsonSerializer(typeof(TimeCampTask));
+                response = httpClient.GetStreamAsync("https://www.timecamp.com/third_party/api/tasks/format/json/api_token/" + ApiToken + "/task_id/" + entrie.task_id);
+                var task = serializer.ReadObject(await response) as TimeCampTask;
+                uniteeTask.Description = task.name;
+                
+                // Get project tack
+                serializer = new DataContractJsonSerializer(typeof(TimeCampTask));
+                response = httpClient.GetStreamAsync("https://www.timecamp.com/third_party/api/tasks/format/json/api_token/" + ApiToken + "/task_id/" + task.parent_id);
+                var projectTask = serializer.ReadObject(await response) as TimeCampTask;
+                uniteeTask.Project = projectTask.name;
 
-                    if (split[i].Contains("data-title=\"Time\""))
-                    {
-                        string literalTime = split[i + 1].Split("<")[0].Trim().Replace(" ", "");
-                        decimal nbMinutes = 0;
-                        if (literalTime.Contains("h"))
-                        {
-                            nbMinutes += Decimal.Parse(literalTime.Split("h")[0].Trim()) * 60;
-                            literalTime = literalTime.Substring(literalTime.IndexOf("h") + 1);
-                        }
-                        if (literalTime.Contains("m"))
-                        {
-                            nbMinutes += Decimal.Parse(literalTime.Split("m")[0].Trim());
-                            literalTime = literalTime.Substring(literalTime.IndexOf("m") + 1);
-                        }
-                        if (literalTime.Contains("s"))
-                        {
-                            nbMinutes += Decimal.Parse(literalTime.Split("s")[0].Trim()) / 60;
-                            literalTime = literalTime.Substring(literalTime.IndexOf("s") + 1);
-                        }
+                uniteeTask.ReferenceFacture = ReferenceFacture;
 
-                        uniteeTask.TimeSpent = nbMinutes;
-                        Console.Write(nbMinutes);
-                    }
-
-                    if (split[i].Contains("data-title=\"Level 1\""))
-                    {
-                        string project = split[i + 1].Split("<")[0].Trim();
-                        uniteeTask.Project = project;
-                        Console.Write(project);
-                    }
-                }
 
                 if (uniteeTask.Project != null && uniteeTask.Date != null && uniteeTask.Description != null)
                 {
@@ -176,15 +173,9 @@ namespace TimecampConverter
                     Console.WriteLine();
                 }
             }
+            return uniteeTaskList;
         }
 
-        private static string FormatLine(string line)
-        {
-            var formattedLine = Regex.Replace(line, "<!--.*?-->", String.Empty, RegexOptions.Singleline);
-            formattedLine = Regex.Replace(formattedLine, "<span.*?>", String.Empty, RegexOptions.Singleline);
-            formattedLine = Regex.Replace(formattedLine, "<a.*?>", String.Empty, RegexOptions.Singleline);
-            formattedLine = formattedLine.Replace("<div style=\" font-weight: bold;\">", "");
-            return formattedLine;
-        }
+        
     }
 }
